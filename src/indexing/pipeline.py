@@ -8,8 +8,8 @@ from typing import List, Optional, Tuple
 
 from src.chunking import make_chunker
 from src.config import Config
-from src.embeddings.base import EMBEDDING_FORMAT_VERSION, SEARCH_DOCUMENT_PREFIX, EmbeddingProvider
-from src.embeddings.nomic_provider import NomicProvider
+from src.embeddings import make_embedder
+from src.embeddings.base import EMBEDDING_FORMAT_VERSION, EmbeddingProvider
 from src.indexing.faiss_sqlite_store import FAISSSQLiteStore
 from src.ingestion.text_loader import TextDocumentLoader
 from src.models import Chunk, Document
@@ -49,24 +49,19 @@ def build_index(
         raise ValueError("После чанкинга не получено ни одного чанка. Проверьте содержимое документов.")
 
     if provider is None:
-        provider = NomicProvider(
-            model_name=config.embedding_model,
-            device=config.get("embedding.device", "cpu"),
-            batch_size=config.embedding_batch_size,
-            trust_remote_code=bool(config.get("embedding.trust_remote_code", True)),
-        )
+        provider = make_embedder(config)
 
     texts = [c.text for c in chunks]
-    print(f"Генерация эмбеддингов для {len(texts)} чанков...")
-    # Эмбеддинги считаются с префиксом search_document: (требование nomic-embed-text-v2-moe).
-    embeddings = provider.encode([SEARCH_DOCUMENT_PREFIX + t for t in texts])
+    print(f"Генерация эмбеддингов для {len(texts)} чанков (провайдер: {provider.name})...")
+    # Провайдер сам добавляет нужный префикс (для nomic — search_document:).
+    embeddings = provider.encode_documents(texts)
 
     store = FAISSSQLiteStore(config.index_path)
     store.begin(
         index_name=index_name,
         strategy=strategy,
-        model=config.embedding_model,
-        provider=config.embedding_provider,
+        model=getattr(provider, "model_name", "") or config.embedding_model,
+        provider=getattr(provider, "name", "") or config.embedding_provider,
         dim=int(embeddings.shape[1]),
         embedding_format=EMBEDDING_FORMAT_VERSION,
     )

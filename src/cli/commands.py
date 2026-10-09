@@ -26,6 +26,35 @@ COMMANDS: Dict[str, Dict[str, Any]] = {
             {"name": "command", "required": False, "description": "команда, для которой показать справку"},
         ],
     },
+    "/models": {
+        "description": "Список и выбор локальных моделей Ollama (эмбеддинги и LLM)",
+        "usage": "/models [list | set <llm|embedding> <name> | pull <name>]",
+        "example": "/models set llm gpt-oss:20b",
+        "subcommands": {
+            "list": {
+                "description": "Показать установленные модели Ollama и текущий выбор",
+                "usage": "/models list",
+                "example": "/models list",
+            },
+            "set": {
+                "description": "Выбрать модель из установленных (llm или embedding)",
+                "usage": "/models set <llm|embedding> <model_name>",
+                "example": "/models set embedding nomic-embed-text",
+                "arguments": [
+                    {"name": "target", "required": True, "description": "что менять: llm или embedding"},
+                    {"name": "model_name", "required": True, "description": "имя установленной модели Ollama"},
+                ],
+            },
+            "pull": {
+                "description": "Загрузить модель из библиотеки Ollama",
+                "usage": "/models pull <model_name>",
+                "example": "/models pull nomic-embed-text",
+                "arguments": [
+                    {"name": "model_name", "required": True, "description": "имя модели для загрузки"},
+                ],
+            },
+        },
+    },
     "/index": {
         "description": "Управление индексами документов",
         "usage": "/index <subcommand> [options]",

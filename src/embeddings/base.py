@@ -27,8 +27,18 @@ class EmbeddingProvider(ABC):
 
     name: str = "base"
     dim: Optional[int] = None
+    model_name: str = ""
 
     @abstractmethod
     def encode(self, texts: List[str], batch_size: Optional[int] = None) -> np.ndarray:
-        """Вернуть матрицу эмбеддингов формы (len(texts), dim)."""
+        """Вернуть матрицу эмбеддингов формы (len(texts), dim) без префиксов."""
         raise NotImplementedError
+
+    def encode_documents(self, texts: List[str], batch_size: Optional[int] = None) -> np.ndarray:
+        """Эмбеддинги документов (по умолчанию — с префиксом ``search_document:``)."""
+        return self.encode([SEARCH_DOCUMENT_PREFIX + t for t in texts], batch_size)
+
+    def encode_query(self, text: str, batch_size: Optional[int] = None) -> np.ndarray:
+        """Эмбеддинг запроса (по умолчанию — с префиксом ``search_query:``)."""
+        return self.encode([SEARCH_QUERY_PREFIX + text], batch_size)
+

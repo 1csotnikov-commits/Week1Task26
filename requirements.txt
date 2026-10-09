@@ -1,21 +1,26 @@
-# Основные зависимости пайплайна индексации документов
-sentence-transformers>=3.0,<4.0
-transformers>=4.40,<5.0
-einops
+# Основные зависимости.
+# Обращения к локальному серверу Ollama выполняются через стандартную библиотеку
+# (urllib), поэтому внешний SDK для LLM/эмбеддингов не требуется.
 numpy
 PyYAML
-openai
 
 # Опционально: FAISS для быстрого поиска по косинусной близости.
-# Если faiss-cpu не устанавливается на Windows Server 2022 / Python 3.12,
-# автоматически используется fallback на numpy + перебор (см. src/indexing/faiss_sqlite_store.py).
+# Если faiss-cpu не устанавливается (Windows / Python 3.14),
+# автоматически используется fallback на numpy + перебор
+# (см. src/indexing/faiss_sqlite_store.py).
 # faiss-cpu
 
-# Примечание по версиям:
-# - sentence-transformers 6.x требует transformers 5.x, с которым кастомный код
-#   модели nomic-embed-text-v2-moe (modeling_hf_nomic_bert.py) несовместим
-#   (нет метода get_extended_attention_mask). Поэтому фиксируем 3.x + 4.x.
-# - Для torch на Windows нужен Microsoft Visual C++ Redistributable (x64).
+# Необязательно (legacy-провайдеры, по умолчанию НЕ используются):
+# - эмбеддинги через sentence-transformers (nomic-ai/nomic-embed-text-v2-moe):
+#     sentence-transformers>=3.0,<4.0
+#     transformers>=4.40,<5.0
+#     einops
+#   Совместимость: не ставьте sentence-transformers 6.x / transformers 5.x —
+#   кастомный код модели nomic (modeling_hf_nomic_bert.py) несовместим с transformers 5.x
+#   (нет метода get_extended_attention_mask).
+# - облачный DeepSeek (provider: deepseek):
+#     openai
 
 # Для запуска тестов (используется встроенный unittest, pytest не обязателен):
 # python -m unittest discover -s tests
+

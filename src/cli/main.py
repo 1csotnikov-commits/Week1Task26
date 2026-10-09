@@ -25,14 +25,17 @@ from src.chat.commands import build_chat_help, parse_chat_command
 from src.chat.scenarios import list_scenarios, load_scenario, run_scenario, save_scenario_results
 from src.chat.task_state import TaskState
 from src.config import Config
-from src.embeddings.nomic_provider import NomicProvider
+from src.embeddings import make_embedder
 from src.evaluation.generator import generate_questions
 from src.evaluation.questions import load_questions, save_questions
 from src.evaluation.report import render_report, render_report_file
 from src.evaluation.runner import ALL_MODES, DEFAULT_MODES, run_evaluation, save_results
 from src.indexing.faiss_sqlite_store import FAISSSQLiteStore
 from src.indexing.pipeline import build_index
-from src.llm.deepseek_provider import DeepSeekProvider
+from src.llm import make_llm_provider
+from src.ollama.client import OllamaError
+from src.ollama.client import list_models as ollama_list_models
+from src.ollama.client import pull_model as ollama_pull_model
 from src.rag.no_rag_pipeline import NoRAGPipeline
 from src.rag.pipeline import RAGPipeline
 from src.rag.query_rewrite import NoOpRewriter, make_rewriter
@@ -41,7 +44,10 @@ from src.reranking.pipeline import RerankerPipeline
 from src.retrieval.vector_retriever import VectorRetriever
 from src.stats.chunk_stats import compute_stats, render, render_compare
 
-BANNER = "Пайплайн индексации документов. Введите /help для списка команд, /exit для выхода."
+BANNER = (
+    "Пайплайн индексации документов (локальные модели Ollama). "
+    "Введите /help для списка команд, /models — выбор модели, /exit — выход."
+)
 
 
 def parse_args(tokens: List[str]) -> Tuple[List[str], dict]:
@@ -278,26 +284,14 @@ def _cmd_delete(app: App, index_name: str) -> str:
 # ---------------------------------------------------------------------- #
 # Вспомогательные фабрики (Dependency Injection)
 # ---------------------------------------------------------------------- #
-def _make_llm(config: Config) -> DeepSeekProvider:
-    provider = config.get("llm.provider", "deepseek")
-    if provider != "deepseek":
-        raise ValueError(f"Неизвестный LLM-провайдер: {provider!r}. Доступен только 'deepseek'.")
-    return DeepSeekProvider(
-        model=config.get("llm.model", "deepseek-chat"),
-        base_url=config.get("llm.base_url", "https://api.deepseek.com"),
-        temperature=float(config.get("llm.temperature", 0.3)),
-        max_tokens=int(config.get("llm.max_tokens", 1024)),
-        timeout=float(config.get("llm.timeout", 60.0)),
-    )
+def _make_llm(config: Config):
+    """Создать LLM-провайдер по конфигу (по умолчанию — локальная модель Ollama)."""
+    return make_llm_provider(config)
 
 
-def _make_embedder(config: Config) -> NomicProvider:
-    return NomicProvider(
-        model_name=config.embedding_model,
-        device=config.get("embedding.device", "cpu"),
-        batch_size=config.embedding_batch_size,
-        trust_remote_code=bool(config.get("embedding.trust_remote_code", True)),
-    )
+def _make_embedder(config: Config):
+    """Создать провайдер эмбеддингов по конфигу (по умолчанию — локальная модель Ollama)."""
+    return make_embedder(config)
 
 
 def _make_retriever(app: App, index_name: str) -> VectorRetriever:
@@ -819,6 +813,121 @@ def _cmd_chat_scenario_list(app: App) -> str:
 
 
 # ---------------------------------------------------------------------- #
+# Команды /models (выбор локальных моделей Ollama)
+# ---------------------------------------------------------------------- #
+def _format_size(num_bytes: int) -> str:
+    gb = num_bytes / (1024 ** 3)
+    if gb >= 1:
+        return f"{gb:.1f}GB"
+    return f"{num_bytes / (1024 ** 2):.0f}MB"
+
+
+def _capabilities_text(capabilities) -> str:
+    return ", ".join(capabilities) if capabilities else "-"
+
+
+def _ollama_models(app: App) -> list:
+    host = app.config.ollama_host
+    try:
+        return ollama_list_models(host)
+    except OllamaError as exc:
+        raise RuntimeError(
+            f"Не удалось получить список моделей Ollama ({host}): {exc}"
+        ) from exc
+
+
+def _cmd_models(app: App, args: List[str]) -> str:
+    if not args or args[0] in ("list", "ls"):
+        return _cmd_models_list(app)
+    sub = args[0]
+    rest = args[1:]
+    if sub == "set":
+        _require_positional(rest, 2, "/models set <llm|embedding> <model_name>")
+        return _cmd_models_set(app, rest[0], rest[1])
+    if sub == "pull":
+        _require_positional(rest, 1, "/models pull <model_name>")
+        return _cmd_models_pull(app, rest[0])
+    raise ValueError(f"Неизвестная подкоманда /models: {sub!r}. Доступно: list, set, pull")
+
+
+def _cmd_models_list(app: App) -> str:
+    host = app.config.ollama_host
+    models = _ollama_models(app)
+    if not models:
+        return (
+            f"В Ollama ({host}) нет установленных моделей. "
+            "Загрузите модель: /models pull <name> (например, /models pull nomic-embed-text)"
+        )
+
+    current_llm = app.config.llm_model
+    current_emb = app.config.embedding_model
+    lines = [f"Локальные модели Ollama (host: {host}):", ""]
+    lines.append(
+        f"     {'МОДЕЛЬ':<30} {'РАЗМЕР':<8} {'ПАРАМ':<8} {'КВАНТ':<8} ВОЗМОЖНОСТИ"
+    )
+    for m in models:
+        name = m["name"]
+        tags = []
+        if name == current_llm:
+            tags.append("LLM")
+        if name == current_emb:
+            tags.append("EMB")
+        mark = "[*]" if tags else "   "
+        suffix = f"   <- {', '.join(tags)}" if tags else ""
+        lines.append(
+            f" {mark} {name:<30} {_format_size(m['size']):<8} {m['parameter_size'] or '-':<8} "
+            f"{m['quantization'] or '-':<8} {_capabilities_text(m['capabilities'])}{suffix}"
+        )
+    lines.append("")
+    lines.append(f"Текущие модели: LLM={current_llm or '(не задана)'}, embeddings={current_emb or '(не задана)'}")
+    lines.append("Сменить: /models set llm <name> | /models set embedding <name>")
+    lines.append("Загрузить новую: /models pull <name>")
+    return "\n".join(lines)
+
+
+def _cmd_models_set(app: App, kind: str, name: str) -> str:
+    kind = kind.lower()
+    if kind not in ("llm", "embedding"):
+        raise ValueError(f"Что менять: llm или embedding, получено {kind!r}.")
+
+    models = _ollama_models(app)
+    found = next((m for m in models if m["name"] == name), None)
+    if found is None:
+        raise ValueError(
+            f"Модель '{name}' не установлена в Ollama. Список: /models list. "
+            f"Загрузить: /models pull {name}"
+        )
+
+    if kind == "embedding":
+        capabilities = found["capabilities"]
+        if capabilities and "embedding" not in capabilities:
+            raise ValueError(
+                f"Модель '{name}' не умеет считать эмбеддинги "
+                f"(возможности: {_capabilities_text(capabilities)}). "
+                "Установите embedding-модель, например: /models pull nomic-embed-text"
+            )
+        saved = app.config.save_local_overrides({"embedding": {"provider": "ollama", "model": name}})
+        return (
+            f"Модель эмбеддингов переключена на '{name}' (сохранено в {saved.name}).\n"
+            "ВАЖНО: переиндексируйте документы, чтобы поиск использовал новую модель: "
+            "/index build <path> --name <index>"
+        )
+
+    saved = app.config.save_local_overrides({"llm": {"provider": "ollama", "model": name}})
+    return f"LLM-модель переключена на '{name}' (сохранено в {saved.name})."
+
+
+def _cmd_models_pull(app: App, name: str) -> str:
+    host = app.config.ollama_host
+    print(f"Загрузка модели '{name}' из Ollama (host: {host}, может занять время)...")
+    try:
+        ollama_pull_model(host, name)
+    except OllamaError as exc:
+        raise RuntimeError(f"Не удалось загрузить модель '{name}': {exc}") from exc
+    return f"Модель '{name}' загружена. Список моделей: /models list"
+
+
+# ---------------------------------------------------------------------- #
 # Диспетчер и точка входа
 # ---------------------------------------------------------------------- #
 def handle_command(line: str, app: App) -> Tuple[bool, str]:
@@ -852,6 +961,8 @@ def handle_command(line: str, app: App) -> Tuple[bool, str]:
         return False, _cmd_eval(app, args)
     if cmd == "/chat":
         return False, _cmd_chat(app, args)
+    if cmd == "/models":
+        return False, _cmd_models(app, args)
 
     return False, f"Неизвестная команда: {cmd!r}. Введите /help для списка команд."
 

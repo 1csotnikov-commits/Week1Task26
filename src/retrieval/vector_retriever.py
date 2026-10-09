@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-from src.embeddings.base import EMBEDDING_FORMAT_VERSION, SEARCH_QUERY_PREFIX, EmbeddingProvider
+from src.embeddings.base import EMBEDDING_FORMAT_VERSION, EmbeddingProvider
 from src.indexing.faiss_sqlite_store import FAISSSQLiteStore
 from src.retrieval.base import Retriever
 from src.retrieval.models import RetrievedChunk
@@ -26,9 +26,10 @@ class VectorRetriever(Retriever):
 
         self.store.load(self.index_name)
         self._check_embedding_format()
+        self._check_embedding_model()
 
-        # Запрос обязательно эмбеддится с префиксом search_query:.
-        query_embedding = self.embedder.encode([SEARCH_QUERY_PREFIX + query])[0]
+        # Запрос эмбеддится тем же провайдером, что и документы (для nomic — с префиксом search_query:).
+        query_embedding = self.embedder.encode_query(query)[0]
 
         hits = self.store.search(query_embedding, top_k)
         return [
@@ -46,3 +47,13 @@ class VectorRetriever(Retriever):
             "Результаты поиска могут быть неточными. Переиндексируйте документы: "
             f"/index build <path> --name {self.index_name}"
         )
+
+    def _check_embedding_model(self) -> None:
+        index_model = getattr(self.store, "index_model", "") or ""
+        embedder_model = getattr(self.embedder, "model_name", "") or ""
+        if index_model and embedder_model and index_model != embedder_model:
+            print(
+                f"ПРЕДУПРЕЖДЕНИЕ: индекс '{self.index_name}' построен моделью эмбеддингов "
+                f"'{index_model}', а поиск идёт моделью '{embedder_model}'. Результаты могут быть "
+                f"неточными. Переиндексируйте документы: /index build <path> --name {self.index_name}"
+            )

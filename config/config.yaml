@@ -1,9 +1,21 @@
+# Локальный сервер Ollama (общий адрес для LLM и эмбеддингов).
+# Все модели берутся из установленных в Ollama; выбор — командой /models.
+ollama:
+  host: http://localhost:11434
+
 embedding:
-  provider: nomic
-  model: nomic-ai/nomic-embed-text-v2-moe
-  trust_remote_code: true
-  device: cpu
+  provider: ollama                      # ollama | nomic (legacy)
+  model: nomic-embed-text               # локальная embedding-модель Ollama
+  base_url: ""                          # пусто -> {ollama.host}/v1 (OpenAI-совместимый эндпоинт)
   batch_size: 16
+  timeout: 300
+  normalize: true                       # L2-нормализация (нужна для косинусной близости в FAISS)
+  use_prefixes: true                    # nomic: search_document: / search_query:
+  # legacy: локальная HF-модель через sentence-transformers
+  # provider: nomic
+  # model: nomic-ai/nomic-embed-text-v2-moe
+  # device: cpu
+  # trust_remote_code: true
 
 chunking:
   default_strategy: structural
@@ -23,13 +35,20 @@ documents:
   extensions: [.md, .txt, .py, .js, .json]
 
 llm:
-  provider: deepseek
-  model: deepseek-chat
-  api_key_env: DEEPSEEK_API_KEY
-  base_url: https://api.deepseek.com
+  provider: ollama                 # ollama | deepseek (legacy)
+  model: gemma3:12b-it-qat         # локальная модель Ollama (меняется командой /models)
+  host: ""                         # пусто -> ollama.host
   temperature: 0.2
   max_tokens: 1500
-  timeout: 60
+  timeout: 300
+  num_ctx: 8192                    # контекстное окно Ollama (по умолчанию 4096 — мало)
+  keep_alive: 5m                   # сколько держать модель в памяти
+  top_p: 0.9
+  # legacy: облачный DeepSeek
+  # provider: deepseek
+  # model: deepseek-chat
+  # base_url: https://api.deepseek.com
+  # api_key_env: DEEPSEEK_API_KEY
 
 retrieval:
   top_k_retrieve: 10

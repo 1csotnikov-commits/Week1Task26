@@ -1,26 +1,36 @@
-# Week1Task25 — Мини-чат с RAG + памятью (production-like)
+# Week1Task26 — Мини-чат с RAG + памятью на локальных моделях Ollama
 
-Расширение проекта Week1Task21–24: локальный пайплайн индексации + RAG + reranking/rewrite + цитаты/источники + мини-чат с памятью задачи.
+Расширение проекта Week1Task21–25: локальный пайплайн индексации + RAG + reranking/rewrite +
+цитаты/источники + мини-чат с памятью задачи. **И эмбеддинги, и LLM работают на локальных
+моделях через Ollama** — облако не используется.
 
-Папка проекта — `C:\II\Week 1 Task 21` (продолжение, публикация в отдельный репозиторий Week1Task25).
+Папка проекта — `C:\1C\Тестирование ИИ Проект\Week 1 Task 21` (публикация — в репозиторий Week1Task26).
 
 Возможности:
 
-1. Индексация документов (Task 21): чанкинг, эмбеддинги `nomic-ai/nomic-embed-text-v2-moe`, FAISS + SQLite, статистика;
-2. RAG-запрос (Task 22): вопрос → retrieval → промт → DeepSeek → ответ; контрольные вопросы;
+1. Индексация документов (Task 21): чанкинг, эмбеддинги локальной модели Ollama `nomic-embed-text`, FAISS + SQLite, статистика;
+2. RAG-запрос (Task 22): вопрос → retrieval → промт → локальная LLM Ollama → ответ; контрольные вопросы;
 3. Реранкинг + query rewrite (Task 23): threshold/similarity/cross_encoder, none/heuristic/llm;
 4. Цитаты и источники (Task 24): структурированный ответ, верификация, режим «не знаю»;
-5. Мини-чат с памятью (Task 25): история диалога, task state (goal/facts/constraints/terms/open_questions), сессии и длинные сценарии.
+5. Мини-чат с памятью (Task 25): история диалога, task state (goal/facts/constraints/terms/open_questions), сессии и длинные сценарии;
+6. Выбор локальных моделей (Task 26): команда `/models` — список установленных в Ollama моделей и переключение LLM/эмбеддингов.
 
 Интерфейс — только CLI (интерактивный REPL), без web. PDF не поддерживаются.
 
 ## Стек
 
-- ОС: Windows Server 2022 (совместимо с Linux/macOS)
-- Python 3.10+
-- `sentence-transformers` + `einops` (эмбеддинги)
+- ОС: Windows 11 (совместимо с Linux/macOS)
+- Python 3.10+ (проверено на 3.14)
+- **Ollama** — локальный сервер моделей (`http://localhost:11434`), нативный `/api/chat`
+  и OpenAI-совместимый `/v1/embeddings`
+- `nomic-embed-text` — локальная модель эмбеддингов Ollama (768 измерений)
+- любая локальная LLM Ollama (по умолчанию `gemma3:12b-it-qat`)
 - `faiss-cpu` (векторный поиск, с fallback на `numpy`)
 - SQLite (метаданные и текст чанков)
+- стандартная библиотека (`urllib`) для обращений к Ollama — без внешних SDK
+
+> Необязательные альтернативы (legacy): эмбеддинги `nomic-ai/nomic-embed-text-v2-moe`
+> через `sentence-transformers` и облачный `deepseek-chat`. По умолчанию не используются.
 
 ## Архитектура
 
@@ -36,10 +46,11 @@ C:\II\Week 1 Task 21\
 ├── src/
 │   ├── ingestion/           # DocumentLoader: text_loader (.md/.txt/.py/.js/.json)
 │   ├── chunking/            # BaseChunker, fixed_size, structural
-│   ├── embeddings/          # EmbeddingProvider, nomic_provider
+│   ├── embeddings/          # EmbeddingProvider, ollama_provider, nomic_provider
 │   ├── indexing/            # IndexStore, faiss_sqlite_store, pipeline
 │   ├── stats/               # chunk_stats (метрики + форматы console/json/csv/markdown)
-│   ├── llm/                 # LLMProvider, deepseek_provider
+│   ├── llm/                 # LLMProvider, ollama_provider, deepseek_provider
+│   ├── ollama/              # клиент Ollama: chat (/api/chat), embed (/v1/embeddings), list/pull
 │   ├── retrieval/           # Retriever, VectorRetriever, RetrievedChunk
 │   ├── reranking/           # Reranker, ThresholdFilter, SimilarityReranker, CrossEncoderReranker, RerankerPipeline
 │   ├── rag/                 # RAGPipeline, NoRAGPipeline, prompt_builder, query_rewrite, citations (парсинг/верификация)
@@ -63,12 +74,23 @@ pip install -r requirements.txt
 pip install "sentence-transformers>=3.0,<4.0" "transformers>=4.40,<5.0" einops
 ```
 
-> **Важно:** при первом запуске модель `nomic-ai/nomic-embed-text-v2-moe`
-> скачается автоматически (**~1–2 ГБ**). Убедитесь, что есть доступ в интернет.
+> **Важно — сначала запустите Ollama.** Проект использует локальный сервер Ollama
+> (`http://localhost:11434`). Если он не запущен: `ollama serve`.
+>
+> **Модель эмбеддингов:** по умолчанию нужна embedding-модель Ollama `nomic-embed-text`
+> (~274 МБ). Если её нет — загрузите в приложении:
+> ```bash
+> ollama pull nomic-embed-text
+> ```
+>
+> **LLM:** подойдёт любая установленная в Ollama генеративная модель (см. `/models`).
+> По умолчанию — `gemma3:12b-it-qat`; можно выбрать другую командой `/models set llm <name>`
+> или отредактировав `config/config.yaml`.
 
-> **Совместимость версий:** не ставьте `sentence-transformers 6.x` / `transformers 5.x` —
-> кастомный код модели nomic (`modeling_hf_nomic_bert.py`) несовместим с transformers 5.x
-> (отсутствует метод `get_extended_attention_mask`). Используйте версии из `requirements.txt`.
+> Генеративные модели (qwen3, gemma3, gpt-oss и т.п.) **не умеют считать эмбеддинги** —
+> для RAG нужна отдельная embedding-модель (`nomic-embed-text` и подобные). Нативный
+> эндпоинт Ollama `/api/embed` в некоторых сборках отключён, поэтому проект использует
+> OpenAI-совместимый `/v1/embeddings`, который работает всегда.
 
 ### Windows Server 2022: возможные проблемы
 
@@ -81,19 +103,51 @@ pip install "sentence-transformers>=3.0,<4.0" "transformers>=4.40,<5.0" einops
   `https://aka.ms/vs/17/release/vc_redist.x64.exe` (тихая установка:
   `vc_redist.x64.exe /install /quiet /norestart`).
 
-## Модель эмбеддингов
+## Локальные модели (Ollama)
 
-Используется только локальная модель:
+И эмбеддинги, и генерация выполняются **локально** через сервер Ollama. Облачные API не используются.
 
+| Роль | Модель (по умолчанию) | Эндпоинт Ollama |
+| --- | --- | --- |
+| Эмбеддинги | `nomic-embed-text` (768 измерений, русский язык) | `POST /v1/embeddings` (OpenAI-совместимый) |
+| LLM (ответы) | `gemma3:12b-it-qat` | `POST /api/chat` (нативный, с `options`/`keep_alive`) |
+
+Ключевые свойства:
+
+- модели берутся из **установленных** в Ollama (см. `/models list`);
+- эмбеддинги L2-нормализуются, поэтому `IndexFlatIP` (inner product) эквивалентен косинусной близости;
+- размерность определяется автоматически из ответа сервера;
+- выбор модели сохраняется в `config/config.local.json` и не коммитится в git.
+
+### Список и выбор моделей
+
+```bash
+> /models                                   # установленные модели + текущий выбор
+> /models set llm gpt-oss:20b               # переключить LLM
+> /models set embedding nomic-embed-text    # переключить модель эмбеддингов
+> /models pull embeddinggemma               # загрузить модель из библиотеки Ollama
 ```
-nomic-ai/nomic-embed-text-v2-moe
-```
 
-- 768 измерений;
-- поддержка русского языка;
-- лицензия Apache 2.0;
-- нормализованные векторы (L2-норма = 1), поэтому `IndexFlatIP`
-  (inner product) эквивалентен косинусной близости.
+`/models set embedding <name>` принимает только модели с возможностью `embedding`
+(иначе будет подсказка загрузить `nomic-embed-text`). После смены модели эмбеддингов
+нужно **переиндексировать** документы: `/index build <path> --name <index>`.
+
+### Настройки (config/config.yaml)
+
+```yaml
+ollama:
+  host: http://localhost:11434
+embedding:
+  provider: ollama
+  model: nomic-embed-text
+  use_prefixes: true          # nomic: search_document: / search_query:
+  normalize: true
+llm:
+  provider: ollama
+  model: gemma3:12b-it-qat
+  num_ctx: 8192               # контекстное окно Ollama (дефолт 4096 — мало для RAG/чата)
+  keep_alive: 5m
+```
 
 ## Запуск CLI
 
@@ -108,6 +162,9 @@ python -m src.cli.main
 | Команда | Описание |
 | --- | --- |
 | `/help [command]` | Справка по командам (описания — из единого источника `commands.py`) |
+| `/models [list]` | Список установленных моделей Ollama с возможностями и текущим выбором |
+| `/models set <llm\|embedding> <name>` | Выбрать модель из установленных (сохраняется в `config.local.json`) |
+| `/models pull <name>` | Загрузить модель из библиотеки Ollama |
 | `/index build <path> [--strategy fixed\|structural] [--name <name>] [--config <path>]` | Построить индекс |
 | `/index list` | Список индексов |
 | `/index info <name>` | Метаданные индекса |
@@ -217,21 +274,22 @@ python -m unittest discover -s tests -t .
 ```
 
 Покрытие: загрузка документов, `fixed_size`, `structural`, эмбеддинги
-(размерность 768 и нормализация; пропускается, если модель недоступна),
-сохранение/загрузка FAISS + SQLite, статистика, retrieval, RAG-пайплайн,
-LLM-провайдер (мок), evaluation, CLI-команды.
+(Ollama-провайдер с мок-сервером: префиксы, батчинг, нормализация; legacy-nomic — пропускается,
+если модель недоступна), сохранение/загрузка FAISS + SQLite, статистика, retrieval,
+RAG-пайплайн, LLM-провайдеры Ollama (мок) и DeepSeek, evaluation, CLI-команды,
+клиент Ollama и команда `/models`.
 
 ## RAG-пайплайн (Task 22)
 
 Первый RAG-запрос: `вопрос → retrieval → prompt → LLM → ответ`.
 
 ```
-вопрос → retrieval (поиск top-k чанков в FAISS) → сборка промта → DeepSeek → ответ (+ источники)
+вопрос → retrieval (поиск top-k чанков в FAISS) → сборка промта → локальная LLM Ollama → ответ (+ источники)
 ```
 
 ### Формат эмбеддингов
 
-Модель `nomic-embed-text-v2-moe` различает типы задач префиксами:
+Модель `nomic-embed-text` различает типы задач префиксами:
 
 - при индексации документов: `search_document: <текст чанка>`;
 - при поиске (запрос пользователя): `search_query: <запрос>`.
@@ -245,12 +303,16 @@ LLM-провайдер (мок), evaluation, CLI-команды.
 Если индекс создан без префиксов (старый индекс Task 21) — при поиске выводится
 предупреждение и предложение переиндексировать через `/index build`.
 
-### LLM-провайдер (DeepSeek)
+### LLM-провайдер (Ollama)
 
-- Модель `deepseek-chat`, endpoint `https://api.deepseek.com`;
-- ключ — из переменной окружения `DEEPSEEK_API_KEY` (в коде не хранится);
-- установка ключа (PowerShell): `$env:DEEPSEEK_API_KEY="sk-..."`;
-- при отсутствии ключа — понятная ошибка с инструкцией.
+- локальный сервер Ollama, модель по умолчанию `gemma3:12b-it-qat`;
+- вызов — через нативный `POST /api/chat` (передаются `options`: `temperature`, `num_predict`,
+  `num_ctx`, `top_p` и `keep_alive`);
+- модель выбирается из установленных командой `/models set llm <name>`;
+- если сервер недоступен — понятная ошибка с подсказкой запустить `ollama serve`.
+
+> Legacy: облачный `deepseek-chat` (`provider: deepseek`, ключ из `DEEPSEEK_API_KEY`) оставлен
+> как необязательная альтернатива и по умолчанию не используется.
 
 ### Команды запросов
 
@@ -477,7 +539,9 @@ data/chat/sessions/<session_name>/
 
 ## Ограничения
 
-- LLM-провайдер только DeepSeek; модель эмбеддингов только nomic-embed-text-v2-moe;
+- и эмбеддинги, и LLM — локальные модели Ollama (по умолчанию `nomic-embed-text` + `gemma3:12b-it-qat`);
+- для эмбеддингов нужна embedding-модель Ollama; генеративные модели (qwen3/gemma3/gpt-oss) для неё не подходят;
+- после смены модели эмбеддингов требуется переиндексация документов;
 - интерфейс — CLI, без web;
 - сравнение качества — эвристики, без LLM-as-judge;
 - task state — компактная выжимка, возможны потери неявных уточнений (особенно в heuristic-режиме);

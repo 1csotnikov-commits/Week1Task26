@@ -6,6 +6,9 @@ __pycache__/
 venv/
 .env
 
+# Локальные настройки (выбор моделей через /models) — не коммитим
+config/config.local.json
+
 # Сгенерированные индексы и модели
 data/index/*
 !data/index/.gitkeep

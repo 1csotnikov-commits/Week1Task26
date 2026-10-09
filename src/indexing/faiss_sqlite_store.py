@@ -399,6 +399,16 @@ class FAISSSQLiteStore(IndexStore):
         """Формат эмбеддингов загруженного/построенного индекса ('' для старых индексов)."""
         return self._embedding_format
 
+    @property
+    def index_model(self) -> str:
+        """Модель эмбеддингов загруженного индекса ('' если неизвестна)."""
+        return self._model
+
+    @property
+    def index_provider(self) -> str:
+        """Провайдер эмбеддингов загруженного индекса ('' если неизвестен)."""
+        return self._provider
+
     def _read_embedding_format(self, index_name: str) -> str:
         try:
             row = self._fetchone("SELECT embedding_format FROM indices WHERE name = ?", (index_name,))
